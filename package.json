@@ -1,6 +1,7 @@
 {
   "name": "threads-bot",
   "version": "1.0.0",
+  "description": "Bot hien thi link Threads",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
