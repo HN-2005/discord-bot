@@ -24,23 +24,23 @@ client.on(Events.MessageCreate, async (message) => {
 
   console.log("📩 Nhận:", message.content);
 
+  // 🔥 regex bắt mọi link Threads
   const regex = /https?:\/\/(www\.)?threads\.(net|com)\/[^\s]+/;
   const match = message.content.match(regex);
   if (!match) return;
 
-  let url = match[0].split('?')[0];
+  let url = match[0];
 
-  // 🔥 dùng proxy để lấy metadata
-  const proxyUrl = url
-    .replace("threads.com", "threadsfix.com")
-    .replace("threads.net", "threadsfix.com");
+  // 🔥 bỏ query (?xmt=...)
+  url = url.split('?')[0];
 
+  // 🔥 chống trùng
   if (processedLinks.has(url)) return;
   processedLinks.add(url);
   setTimeout(() => processedLinks.delete(url), 10000);
 
   try {
-    const { data } = await axios.get(proxyUrl, {
+    const { data } = await axios.get(url, {
       headers: { "User-Agent": "Mozilla/5.0" },
       timeout: 10000
     });
@@ -48,29 +48,21 @@ client.on(Events.MessageCreate, async (message) => {
     const $ = cheerio.load(data);
 
     const ogTitle = $('meta[property="og:title"]').attr('content') || '';
-    const description =
-      $('meta[property="og:description"]').attr('content') ||
-      $('meta[name="twitter:description"]').attr('content') ||
-      '';
+    const description = $('meta[property="og:description"]').attr('content') || '';
+    const image = $('meta[property="og:image"]').attr('content');
 
-    let image =
-      $('meta[property="og:image"]').attr('content') ||
-      $('meta[name="twitter:image"]').attr('content');
-
-    let video =
-      $('meta[property="og:video"]').attr('content') ||
-      $('meta[property="og:video:secure_url"]').attr('content');
-
-    // 🧠 username
+    // 🧠 lấy username từ URL
     const urlMatch = url.match(/threads\.(net|com)\/@([^\/]+)/);
     const username = urlMatch ? `@${urlMatch[2]}` : '@user';
 
-    // 🧠 display name
-    let displayName = username.replace('@', '');
+    // 🧠 parse tên
+    let displayName = 'Threads User';
 
     const nameMatch = ogTitle.match(/^(.*?)\s*\(@/);
-    if (nameMatch && nameMatch[1]) {
+    if (nameMatch && !nameMatch[1].toLowerCase().includes('threads')) {
       displayName = nameMatch[1].trim();
+    } else {
+      displayName = username.replace('@', '');
     }
 
     const embed = new EmbedBuilder()
@@ -83,14 +75,7 @@ client.on(Events.MessageCreate, async (message) => {
       embed.setDescription(description.replace(/\n{3,}/g, '\n\n').trim());
     }
 
-    if (video) {
-      embed.setImage(video);
-      embed.setFooter({ text: "▶️ Video Threads" });
-    } else if (
-      image &&
-      !image.includes("profile_pic") &&
-      !image.includes("avatar")
-    ) {
+    if (image && !image.includes("profile_pic")) {
       embed.setImage(image);
     }
 
@@ -101,11 +86,6 @@ client.on(Events.MessageCreate, async (message) => {
 
   } catch (err) {
     console.error("❌ Lỗi:", err.message);
-
-    await message.reply({
-      content: `🔗 ${url}`,
-      allowedMentions: { repliedUser: false }
-    });
   }
 });
 
