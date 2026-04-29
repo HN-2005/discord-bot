@@ -18,7 +18,6 @@ client.once(Events.ClientReady, (c) => {
   console.log(`🚀 Bot online: ${c.user.tag}`);
 });
 
-// chống trùng link
 const processedLinks = new Set();
 
 client.on(Events.MessageCreate, async (message) => {
@@ -34,10 +33,13 @@ client.on(Events.MessageCreate, async (message) => {
   processedLinks.add(url);
   setTimeout(() => processedLinks.delete(url), 10000);
 
+  // 🔥 FIX USERNAME (lấy từ URL luôn)
+  const urlMatch = url.match(/threads\.(net|com)\/@([^\/]+)/);
+  let username = urlMatch ? urlMatch[2] : "user";
+  let displayName = username;
+
   let image = null;
   let description = "";
-  let username = "";
-  let displayName = "Threads User";
 
   try {
     // lấy caption nhẹ
@@ -62,27 +64,18 @@ client.on(Events.MessageCreate, async (message) => {
     const page = await browser.newPage();
     await page.goto(url, { waitUntil: "networkidle2", timeout: 20000 });
 
-    // lấy ảnh/video
+    // 🔥 lấy media ổn định hơn
     image = await page.evaluate(() => {
-      const img = document.querySelector('img');
-      if (img) return img.src;
-
+      // ưu tiên video
       const video = document.querySelector('video');
       if (video) return video.poster || video.src;
 
+      // fallback ảnh
+      const img = document.querySelector('img[src*="cdn"]');
+      if (img) return img.src;
+
       return null;
     });
-
-    // lấy username
-    username = await page.evaluate(() => {
-      const link = document.querySelector('a[href*="/@"]');
-      return link ? link.href.split('/@')[1].split('/')[0] : "";
-    });
-
-    if (username) {
-      displayName = username;
-      username = "@" + username;
-    }
 
     await browser.close();
 
@@ -92,7 +85,7 @@ client.on(Events.MessageCreate, async (message) => {
 
   const embed = new EmbedBuilder()
     .setColor(0x000000)
-    .setTitle(`${he.decode(displayName)} (${username}) on Threads`)
+    .setTitle(`${he.decode(displayName)} (@${username}) on Threads`)
     .setURL(url)
     .setTimestamp();
 
