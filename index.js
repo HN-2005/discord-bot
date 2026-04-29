@@ -12,107 +12,133 @@ const client = new Client({
   ]
 });
 
+// ===== CONFIG =====
+const LINK_TTL = 15000; // chống spam link 15s
+const processedLinks = new Set();
+
+// ===== READY =====
 client.once(Events.ClientReady, (c) => {
   console.log(`🚀 Bot online: ${c.user.tag}`);
 });
 
-// 🧠 chống trùng link
-const processedLinks = new Set();
+// ===== UTIL =====
+function normalizeThreadsUrl(rawUrl) {
+  let url = rawUrl.split('?')[0];
 
+  // convert sang proxy để lấy metadata
+  url = url
+    .replace("threads.net", "threadsfix.com")
+    .replace("threads.com", "threadsfix.com");
+
+  return url;
+}
+
+function extractOriginalUrl(rawUrl) {
+  return rawUrl.split('?')[0];
+}
+
+// ===== MAIN =====
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
 
-  console.log("📩 Nhận:", message.content);
-
-  // 🔥 bắt mọi link Threads
   const regex = /https?:\/\/(www\.)?threads\.(net|com)\/[^\s]+/;
   const match = message.content.match(regex);
   if (!match) return;
 
-  let url = match[0];
+  const originalUrl = extractOriginalUrl(match[0]);
+  const proxyUrl = normalizeThreadsUrl(match[0]);
 
-  // 🔥 bỏ query (?xmt=...)
-  url = url.split('?')[0];
-
-  // 🔥 chống trùng
-  if (processedLinks.has(url)) return;
-  processedLinks.add(url);
-  setTimeout(() => processedLinks.delete(url), 10000);
+  // chống trùng
+  if (processedLinks.has(originalUrl)) return;
+  processedLinks.add(originalUrl);
+  setTimeout(() => processedLinks.delete(originalUrl), LINK_TTL);
 
   try {
-    const { data } = await axios.get(url, {
-      headers: { "User-Agent": "Mozilla/5.0" },
-      timeout: 10000
+    const { data } = await axios.get(proxyUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+        "Accept-Language": "en-US,en;q=0.9"
+      },
+      timeout: 15000
     });
 
     const $ = cheerio.load(data);
 
+    // ===== TITLE =====
     const ogTitle = $('meta[property="og:title"]').attr('content') || '';
-    const description = $('meta[property="og:description"]').attr('content') || '';
 
-    // 🔥 LẤY ẢNH + VIDEO (fallback nhiều lớp)
+    // ===== DESCRIPTION =====
+    let description =
+      $('meta[property="og:description"]').attr('content') ||
+      $('meta[name="twitter:description"]').attr('content') ||
+      '';
+
+    if (description) {
+      description = description
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+    }
+
+    // ===== MEDIA =====
     let image =
       $('meta[property="og:image"]').attr('content') ||
-      $('meta[name="twitter:image"]').attr('content') ||
+      $('meta[name="twitter:image"]').attr('content');
+
+    let video =
       $('meta[property="og:video"]').attr('content') ||
       $('meta[property="og:video:secure_url"]').attr('content');
 
-    // 🔥 fallback từ HTML (bắt CDN)
-    if (!image) {
-      const html = $.html();
-      const cdnMatch = html.match(/https:\/\/scontent[^\s"'<>]+/);
-      if (cdnMatch) {
-        image = cdnMatch[0];
-      }
-    }
-
-    // 🧠 lấy username từ URL
-    const urlMatch = url.match(/threads\.(net|com)\/@([^\/]+)/);
+    // ===== USERNAME =====
+    const urlMatch = originalUrl.match(/threads\.(net|com)\/@([^\/]+)/);
     const username = urlMatch ? `@${urlMatch[2]}` : '@user';
 
-    // 🧠 parse tên
-    let displayName = 'Threads User';
+    // ===== DISPLAY NAME =====
+    let displayName = username.replace('@', '');
 
     const nameMatch = ogTitle.match(/^(.*?)\s*\(@/);
-    if (nameMatch && !nameMatch[1].toLowerCase().includes('threads')) {
+    if (nameMatch && nameMatch[1]) {
       displayName = nameMatch[1].trim();
-    } else {
-      displayName = username.replace('@', '');
     }
 
+    // ===== EMBED =====
     const embed = new EmbedBuilder()
       .setColor(0x000000)
       .setTitle(`${displayName} (${username}) on Threads`)
-      .setURL(url)
+      .setURL(originalUrl)
       .setTimestamp();
 
     if (description) {
-      embed.setDescription(description.replace(/\n{3,}/g, '\n\n').trim());
+      embed.setDescription(description);
     }
 
-    // 🔥 hiển thị ảnh nếu hợp lệ
-    if (
+    // ===== MEDIA LOGIC =====
+    if (video) {
+      embed.setImage(video);
+      embed.setFooter({ text: "▶️ Video Threads" });
+    } else if (
       image &&
       !image.includes("profile_pic") &&
-      !image.includes("default") &&
       !image.includes("avatar")
     ) {
       embed.setImage(image);
-
-      // 🎥 detect video
-      if (image.includes("mp4")) {
-        embed.setFooter({ text: "▶️ Video trên Threads" });
-      }
     }
 
+    // ===== SEND =====
     await message.reply({
       embeds: [embed],
       allowedMentions: { repliedUser: false }
     });
 
   } catch (err) {
-    console.error("❌ Lỗi:", err.message);
+    console.error("❌ Lỗi fetch Threads:", err.message);
+
+    // fallback: gửi link thường
+    await message.reply({
+      content: `🔗 ${originalUrl}`,
+      allowedMentions: { repliedUser: false }
+    });
   }
 });
 
+// ===== LOGIN =====
 client.login(process.env.TOKEN);
