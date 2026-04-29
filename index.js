@@ -2,7 +2,6 @@ require('dotenv').config();
 
 const { Client, GatewayIntentBits, EmbedBuilder, Events } = require('discord.js');
 const axios = require('axios');
-const cheerio = require('cheerio');
 
 const client = new Client({
   intents: [
@@ -16,79 +15,52 @@ client.once(Events.ClientReady, (c) => {
   console.log(`🚀 Bot online: ${c.user.tag}`);
 });
 
-// 🧠 chống trùng link (fix double reply)
+// chống trùng theo link (đã normalize)
 const processedLinks = new Set();
 
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
 
-  console.log("📩 Nhận:", message.content);
-
-  // 🔥 bắt mọi link Threads
   const regex = /https?:\/\/(www\.)?threads\.(net|com)\/[^\s]+/;
   const match = message.content.match(regex);
   if (!match) return;
 
-  let url = match[0];
+  let url = match[0].split('?')[0]; // bỏ query
 
-  // 🔥 bỏ query (?xmt=...)
-  url = url.split('?')[0];
-
-  // 🔥 chống trùng
   if (processedLinks.has(url)) return;
   processedLinks.add(url);
   setTimeout(() => processedLinks.delete(url), 10000);
 
   try {
-    const { data } = await axios.get(url, {
-      headers: { "User-Agent": "Mozilla/5.0" },
-      timeout: 10000
-    });
+    // 🔥 gọi oEmbed
+    const { data } = await axios.get(
+      `https://www.threads.com/oembed?url=${encodeURIComponent(url)}`,
+      { timeout: 10000 }
+    );
 
-    const $ = cheerio.load(data);
+    // 🧠 dữ liệu từ oEmbed
+    const authorName = data.author_name || 'Threads User';
+    const authorUrl = data.author_url || '';
+    const caption = data.title || '';
+    const thumb = data.thumbnail_url || null;
 
-    const ogTitle = $('meta[property="og:title"]').attr('content') || '';
-    const description = $('meta[property="og:description"]').attr('content') || '';
-
-    // 🔥 FIX ẢNH (ảnh + video)
-    let image =
-      $('meta[property="og:image"]').attr('content') ||
-      $('meta[name="twitter:image"]').attr('content') ||
-      $('meta[property="og:video"]').attr('content') ||
-      $('meta[property="og:video:secure_url"]').attr('content');
-
-    // 🧠 lấy username từ URL
-    const urlMatch = url.match(/threads\.(net|com)\/@([^\/]+)/);
-    const username = urlMatch ? `@${urlMatch[2]}` : '@user';
-
-    // 🧠 parse tên
-    let displayName = 'Threads User';
-
-    const nameMatch = ogTitle.match(/^(.*?)\s*\(@/);
-    if (nameMatch && !nameMatch[1].toLowerCase().includes('threads')) {
-      displayName = nameMatch[1].trim();
-    } else {
-      displayName = username.replace('@', '');
-    }
+    // fallback username từ URL
+    const userMatch = url.match(/threads\.(net|com)\/@([^\/]+)/);
+    const username = userMatch ? `@${userMatch[2]}` : '';
 
     const embed = new EmbedBuilder()
       .setColor(0x000000)
-      .setTitle(`${displayName} (${username}) on Threads`)
+      .setTitle(`${authorName} (${username}) on Threads`)
       .setURL(url)
       .setTimestamp();
 
-    if (description) {
-      embed.setDescription(description.replace(/\n{3,}/g, '\n\n').trim());
+    if (caption) {
+      embed.setDescription(caption.replace(/\n{3,}/g, '\n\n').trim());
     }
 
-    // 🔥 hiển thị ảnh nếu hợp lệ
-    if (
-      image &&
-      !image.includes("profile_pic") &&
-      !image.includes("default") &&
-      !image.includes("avatar")
-    ) {
-      embed.setImage(image);
+    // 🔥 thumbnail/video thumb
+    if (thumb) {
+      embed.setImage(thumb);
     }
 
     await message.reply({
@@ -97,7 +69,13 @@ client.on(Events.MessageCreate, async (message) => {
     });
 
   } catch (err) {
-    console.error("❌ Lỗi:", err.message);
+    console.error("❌ oEmbed lỗi:", err.message);
+
+    // fallback đơn giản nếu oEmbed fail
+    await message.reply({
+      content: `📎 ${url}`,
+      allowedMentions: { repliedUser: false }
+    });
   }
 });
 
