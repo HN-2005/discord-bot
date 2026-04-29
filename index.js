@@ -1,6 +1,12 @@
 require('dotenv').config();
 
-const { Client, GatewayIntentBits, EmbedBuilder, Events } = require('discord.js');
+const {
+  Client,
+  GatewayIntentBits,
+  EmbedBuilder,
+  Events
+} = require('discord.js');
+
 const axios = require('axios');
 const cheerio = require('cheerio');
 
@@ -13,131 +19,103 @@ const client = new Client({
 });
 
 // ===== CONFIG =====
-const LINK_TTL = 15000; // chống spam link 15s
-const processedLinks = new Set();
+const DELAY = 2500; // chờ Discord embed
+const processed = new Set();
 
 // ===== READY =====
-client.once(Events.ClientReady, (c) => {
-  console.log(`🚀 Bot online: ${c.user.tag}`);
+client.once(Events.ClientReady, () => {
+  console.log(`🚀 Bot online`);
 });
 
-// ===== UTIL =====
-function normalizeThreadsUrl(rawUrl) {
-  let url = rawUrl.split('?')[0];
-
-  // convert sang proxy để lấy metadata
-  url = url
-    .replace("threads.net", "threadsfix.com")
-    .replace("threads.com", "threadsfix.com");
-
-  return url;
-}
-
-function extractOriginalUrl(rawUrl) {
-  return rawUrl.split('?')[0];
+// ===== CHECK THREADS =====
+function getThreadsUrl(content) {
+  const regex = /https?:\/\/(www\.)?threads\.(net|com)\/[^\s]+/;
+  const match = content.match(regex);
+  return match ? match[0].split('?')[0] : null;
 }
 
 // ===== MAIN =====
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
 
-  const regex = /https?:\/\/(www\.)?threads\.(net|com)\/[^\s]+/;
-  const match = message.content.match(regex);
-  if (!match) return;
+  const url = getThreadsUrl(message.content);
+  if (!url) return;
 
-  const originalUrl = extractOriginalUrl(match[0]);
-  const proxyUrl = normalizeThreadsUrl(match[0]);
+  if (processed.has(url)) return;
+  processed.add(url);
+  setTimeout(() => processed.delete(url), 15000);
 
-  // chống trùng
-  if (processedLinks.has(originalUrl)) return;
-  processedLinks.add(originalUrl);
-  setTimeout(() => processedLinks.delete(originalUrl), LINK_TTL);
+  // ⏳ chờ Discord embed
+  setTimeout(async () => {
+    try {
+      const msg = await message.fetch();
 
-  try {
-    const { data } = await axios.get(proxyUrl, {
-      headers: {
-        "User-Agent": "Mozilla/5.0",
-        "Accept-Language": "en-US,en;q=0.9"
-      },
-      timeout: 15000
-    });
+      // 👉 nếu Discord đã embed (có embed sẵn)
+      if (msg.embeds.length > 0) {
+        console.log("✅ Discord embed OK → bỏ qua");
+        return;
+      }
 
-    const $ = cheerio.load(data);
+      console.log("⚠️ Không có embed → dùng fallback");
 
-    // ===== TITLE =====
-    const ogTitle = $('meta[property="og:title"]').attr('content') || '';
+      // ===== SCRAPE bằng proxy =====
+      const proxyUrl = url
+        .replace("threads.com", "threadsfix.com")
+        .replace("threads.net", "threadsfix.com");
 
-    // ===== DESCRIPTION =====
-    let description =
-      $('meta[property="og:description"]').attr('content') ||
-      $('meta[name="twitter:description"]').attr('content') ||
-      '';
+      const { data } = await axios.get(proxyUrl, {
+        headers: { "User-Agent": "Mozilla/5.0" }
+      });
 
-    if (description) {
-      description = description
-        .replace(/\n{3,}/g, '\n\n')
-        .trim();
+      const $ = cheerio.load(data);
+
+      const title =
+        $('meta[property="og:title"]').attr('content') || '';
+
+      let desc =
+        $('meta[property="og:description"]').attr('content') || '';
+
+      let image =
+        $('meta[property="og:image"]').attr('content') ||
+        $('meta[name="twitter:image"]').attr('content');
+
+      let video =
+        $('meta[property="og:video"]').attr('content');
+
+      // username
+      const u = url.match(/@([^\/]+)/);
+      const username = u ? `@${u[1]}` : '@user';
+
+      // display name
+      let name = username.replace('@', '');
+      const nameMatch = title.match(/^(.*?)\s*\(@/);
+      if (nameMatch) name = nameMatch[1];
+
+      // ===== EMBED =====
+      const embed = new EmbedBuilder()
+        .setColor(0x000000)
+        .setTitle(`${name} (${username}) on Threads`)
+        .setURL(url)
+        .setTimestamp();
+
+      if (desc) embed.setDescription(desc);
+
+      if (video) {
+        embed.setImage(video);
+        embed.setFooter({ text: "▶️ Video Threads" });
+      } else if (image) {
+        embed.setImage(image);
+      }
+
+      await message.reply({
+        embeds: [embed],
+        allowedMentions: { repliedUser: false }
+      });
+
+    } catch (err) {
+      console.error("❌ Fallback lỗi:", err.message);
     }
-
-    // ===== MEDIA =====
-    let image =
-      $('meta[property="og:image"]').attr('content') ||
-      $('meta[name="twitter:image"]').attr('content');
-
-    let video =
-      $('meta[property="og:video"]').attr('content') ||
-      $('meta[property="og:video:secure_url"]').attr('content');
-
-    // ===== USERNAME =====
-    const urlMatch = originalUrl.match(/threads\.(net|com)\/@([^\/]+)/);
-    const username = urlMatch ? `@${urlMatch[2]}` : '@user';
-
-    // ===== DISPLAY NAME =====
-    let displayName = username.replace('@', '');
-
-    const nameMatch = ogTitle.match(/^(.*?)\s*\(@/);
-    if (nameMatch && nameMatch[1]) {
-      displayName = nameMatch[1].trim();
-    }
-
-    // ===== EMBED =====
-    const embed = new EmbedBuilder()
-      .setColor(0x000000)
-      .setTitle(`${displayName} (${username}) on Threads`)
-      .setURL(originalUrl)
-      .setTimestamp();
-
-    if (description) {
-      embed.setDescription(description);
-    }
-
-    // ===== MEDIA LOGIC =====
-    if (video) {
-      embed.setImage(video);
-      embed.setFooter({ text: "▶️ Video Threads" });
-    } else if (
-      image &&
-      !image.includes("profile_pic") &&
-      !image.includes("avatar")
-    ) {
-      embed.setImage(image);
-    }
-
-    // ===== SEND =====
-    await message.reply({
-      embeds: [embed],
-      allowedMentions: { repliedUser: false }
-    });
-
-  } catch (err) {
-    console.error("❌ Lỗi fetch Threads:", err.message);
-
-    // fallback: gửi link thường
-    await message.reply({
-      content: `🔗 ${originalUrl}`,
-      allowedMentions: { repliedUser: false }
-    });
-  }
+  }, DELAY);
 });
 
 // ===== LOGIN =====
