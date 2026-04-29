@@ -1,12 +1,6 @@
 require('dotenv').config();
 
-const {
-  Client,
-  GatewayIntentBits,
-  EmbedBuilder,
-  Events
-} = require('discord.js');
-
+const { Client, GatewayIntentBits, EmbedBuilder, Events } = require('discord.js');
 const axios = require('axios');
 const cheerio = require('cheerio');
 
@@ -18,60 +12,43 @@ const client = new Client({
   ]
 });
 
-// ===== CONFIG =====
-const processed = new Set();
-const TTL = 15000;
-
-// ===== READY =====
-client.once(Events.ClientReady, () => {
-  console.log(`🚀 Bot online`);
+client.once(Events.ClientReady, (c) => {
+  console.log(`🚀 Bot online: ${c.user.tag}`);
 });
 
-// ===== UTIL =====
-function getThreadsUrl(content) {
-  const regex = /https?:\/\/(www\.)?threads\.(net|com)\/[^\s]+/;
-  const match = content.match(regex);
-  return match ? match[0].split('?')[0] : null;
-}
+// 🧠 chống trùng link
+const processedLinks = new Set();
 
-function toProxy(url) {
-  return url
-    .replace("threads.com", "threadsfix.com")
-    .replace("threads.net", "threadsfix.com");
-}
-
-// ===== MAIN =====
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
 
-  const url = getThreadsUrl(message.content);
-  if (!url) return;
+  console.log("📩 Nhận:", message.content);
 
-  if (processed.has(url)) return;
-  processed.add(url);
-  setTimeout(() => processed.delete(url), TTL);
+  const regex = /https?:\/\/(www\.)?threads\.(net|com)\/[^\s]+/;
+  const match = message.content.match(regex);
+  if (!match) return;
+
+  let url = match[0].split('?')[0];
+
+  // 🔥 dùng proxy để lấy metadata
+  const proxyUrl = url
+    .replace("threads.com", "threadsfix.com")
+    .replace("threads.net", "threadsfix.com");
+
+  if (processedLinks.has(url)) return;
+  processedLinks.add(url);
+  setTimeout(() => processedLinks.delete(url), 10000);
 
   try {
-    // 👉 tắt embed link gốc để không bị double
-    if (message.suppressEmbeds) {
-      try { await message.suppressEmbeds(true); } catch {}
-    }
-
-    const proxyUrl = toProxy(url);
-
     const { data } = await axios.get(proxyUrl, {
-      headers: {
-        "User-Agent": "Mozilla/5.0",
-        "Accept-Language": "en-US,en;q=0.9"
-      },
+      headers: { "User-Agent": "Mozilla/5.0" },
       timeout: 10000
     });
 
     const $ = cheerio.load(data);
 
-    // ===== META =====
     const ogTitle = $('meta[property="og:title"]').attr('content') || '';
-    let description =
+    const description =
       $('meta[property="og:description"]').attr('content') ||
       $('meta[name="twitter:description"]').attr('content') ||
       '';
@@ -84,31 +61,27 @@ client.on(Events.MessageCreate, async (message) => {
       $('meta[property="og:video"]').attr('content') ||
       $('meta[property="og:video:secure_url"]').attr('content');
 
-    // ===== USER =====
-    const u = url.match(/@([^\/]+)/);
-    const username = u ? `@${u[1]}` : '@user';
+    // 🧠 username
+    const urlMatch = url.match(/threads\.(net|com)\/@([^\/]+)/);
+    const username = urlMatch ? `@${urlMatch[2]}` : '@user';
 
+    // 🧠 display name
     let displayName = username.replace('@', '');
+
     const nameMatch = ogTitle.match(/^(.*?)\s*\(@/);
     if (nameMatch && nameMatch[1]) {
       displayName = nameMatch[1].trim();
     }
 
-    // ===== CLEAN TEXT =====
-    if (description) {
-      description = description
-        .replace(/\n{3,}/g, '\n\n')
-        .trim();
-    }
-
-    // ===== EMBED =====
     const embed = new EmbedBuilder()
       .setColor(0x000000)
       .setTitle(`${displayName} (${username}) on Threads`)
       .setURL(url)
       .setTimestamp();
 
-    if (description) embed.setDescription(description);
+    if (description) {
+      embed.setDescription(description.replace(/\n{3,}/g, '\n\n').trim());
+    }
 
     if (video) {
       embed.setImage(video);
@@ -127,9 +100,8 @@ client.on(Events.MessageCreate, async (message) => {
     });
 
   } catch (err) {
-    console.error("❌ ERROR:", err.message);
+    console.error("❌ Lỗi:", err.message);
 
-    // fallback gửi link
     await message.reply({
       content: `🔗 ${url}`,
       allowedMentions: { repliedUser: false }
@@ -137,5 +109,4 @@ client.on(Events.MessageCreate, async (message) => {
   }
 });
 
-// ===== LOGIN =====
 client.login(process.env.TOKEN);
