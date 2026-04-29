@@ -4,6 +4,7 @@ const { Client, GatewayIntentBits, EmbedBuilder, Events } = require('discord.js'
 const axios = require('axios');
 const chromium = require('@sparticuz/chromium');
 const puppeteer = require('puppeteer-core');
+const he = require('he');
 
 const client = new Client({
   intents: [
@@ -17,6 +18,7 @@ client.once(Events.ClientReady, (c) => {
   console.log(`🚀 Bot online: ${c.user.tag}`);
 });
 
+// chống trùng link
 const processedLinks = new Set();
 
 client.on(Events.MessageCreate, async (message) => {
@@ -38,7 +40,7 @@ client.on(Events.MessageCreate, async (message) => {
   let displayName = "Threads User";
 
   try {
-    // 🔥 lấy caption nhẹ bằng axios
+    // lấy caption nhẹ
     const { data } = await axios.get(url, {
       headers: { "User-Agent": "Mozilla/5.0" },
       timeout: 5000
@@ -46,10 +48,11 @@ client.on(Events.MessageCreate, async (message) => {
 
     description =
       data.match(/property="og:description" content="([^"]+)"/)?.[1] || "";
+
   } catch {}
 
   try {
-    // 🔥 Puppeteer lấy ảnh/video thật
+    // Puppeteer lấy media thật
     const browser = await puppeteer.launch({
       args: chromium.args,
       executablePath: await chromium.executablePath(),
@@ -59,7 +62,7 @@ client.on(Events.MessageCreate, async (message) => {
     const page = await browser.newPage();
     await page.goto(url, { waitUntil: "networkidle2", timeout: 20000 });
 
-    // lấy media
+    // lấy ảnh/video
     image = await page.evaluate(() => {
       const img = document.querySelector('img');
       if (img) return img.src;
@@ -89,12 +92,23 @@ client.on(Events.MessageCreate, async (message) => {
 
   const embed = new EmbedBuilder()
     .setColor(0x000000)
-    .setTitle(`${displayName} (${username}) on Threads`)
+    .setTitle(`${he.decode(displayName)} (${username}) on Threads`)
     .setURL(url)
     .setTimestamp();
 
-  if (description) embed.setDescription(description);
-  if (image) embed.setImage(image);
+  if (description) {
+    embed.setDescription(
+      he.decode(description).replace(/\n{3,}/g, '\n\n').trim()
+    );
+  }
+
+  if (image) {
+    embed.setImage(image);
+
+    if (image.includes("mp4")) {
+      embed.setFooter({ text: "▶️ Video trên Threads" });
+    }
+  }
 
   await message.reply({
     embeds: [embed],
